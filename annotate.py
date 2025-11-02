@@ -6,7 +6,6 @@ Supports both Ollama (local) and GPT-4 (API)
 import pandas as pd
 import json
 import subprocess
-import time
 from datetime import datetime
 
 def annotate_with_ollama(text, model="qwen2.5:7b"):
