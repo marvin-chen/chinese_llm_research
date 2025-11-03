@@ -6,7 +6,7 @@ Supports both Ollama (local) and GPT-4 (API)
 import pandas as pd
 import json
 import subprocess
-from datetime import datetime
+import time
 
 def annotate_with_ollama(text, model="qwen2.5:7b"):
     """
@@ -31,8 +31,8 @@ def annotate_with_ollama(text, model="qwen2.5:7b"):
    - 不相关：人名、地名、娱乐内容等
 
 2. 情感分类（如果相关）：
-   +2: 强烈正面（赞扬、鼓励孝道）
-   +1: 温和正面（肯定孝的重要性）
+   2: 强烈正面（赞扬、鼓励孝道）
+   1: 温和正面（肯定孝的重要性）
    0: 中性（事实陈述、描述性）
    -1: 温和负面（质疑、批评）
    -2: 强烈负面（拒绝、讽刺孝道）
@@ -46,6 +46,8 @@ def annotate_with_ollama(text, model="qwen2.5:7b"):
     "reasoning": "你的理由"
 }}"""
 
+# note that json can't read + sign 
+
     try:
         # Call Ollama via subprocess
         result = subprocess.run(
@@ -58,6 +60,9 @@ def annotate_with_ollama(text, model="qwen2.5:7b"):
         )
 
         response = result.stdout.strip()
+        
+         # ALWAYS print raw LLM output for debugging!
+        print("\n--- RAW LLM OUTPUT ---\n", response, "\n----------------------\n")
 
         # Try to parse JSON from response
         # Sometimes LLM adds extra text, so we need to extract JSON
@@ -163,7 +168,7 @@ def annotate_with_gpt4(text, api_key):
         }
 
 
-def batch_annotate(input_file, output_file, num_posts=30, use_ollama=True, 
+def batch_annotate(input_file, output_file, num_posts=10, use_ollama=True, 
                    model="qwen2.5:7b", api_key=None):
     """
     Batch annotate posts from preprocessed data.
@@ -249,17 +254,17 @@ def batch_annotate(input_file, output_file, num_posts=30, use_ollama=True,
                 label = {2: "Strongly Positive", 1: "Mildly Positive", 
                         0: "Neutral", -1: "Mildly Negative", 
                         -2: "Strongly Negative"}.get(sentiment, "Unknown")
-                print(f"  {sentiment:+2d} ({label}): {count}")
+                print(f"  {int(sentiment):+2d} ({label}): {count}")
 
-    print("\n" + "="*80)
-    print("NEXT STEPS:")
-    print("="*80)
-    print(f"1. Open {output_file} in Excel/spreadsheet")
-    print("2. Review the annotations manually")
-    print("3. Add a column 'manual_relevant' and 'manual_sentiment'")
-    print("4. Fill in your own judgments")
-    print("5. Compare with LLM annotations to calculate accuracy")
-    print("\nSee validation_template.csv for example format")
+    # print("\n" + "="*80)
+    # print("NEXT STEPS:")
+    # print("="*80)
+    # print(f"1. Open {output_file} in Excel/spreadsheet")
+    # print("2. Review the annotations manually")
+    # print("3. Add a column 'manual_relevant' and 'manual_sentiment'")
+    # print("4. Fill in your own judgments")
+    # print("5. Compare with LLM annotations to calculate accuracy")
+    # print("\nSee validation_template.csv for example format")
 
 
 def create_validation_template(annotations_file):
@@ -282,9 +287,9 @@ def create_validation_template(annotations_file):
 
 if __name__ == "__main__":
     # Configuration
-    INPUT_FILE = "weibo_for_annotation_孝.csv"  # From preprocessing
+    INPUT_FILE = "weibo_for_annotation_孝_2016-01-01.csv"  # From preprocessing
     OUTPUT_FILE = "llm_annotations_sample.csv"
-    NUM_POSTS = 30  # Start with 30 posts
+    NUM_POSTS = 10  # Start with 10 posts
 
     # Choose LLM
     USE_OLLAMA = True  # Set to False to use GPT-4
