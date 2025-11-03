@@ -1,6 +1,19 @@
 """
 LLM Annotation Script for Weibo Data
-Supports both Ollama (local) and GPT-4 (API)
+
+This script provides helpers to label Weibo posts for the concept of "孝"
+using either a local Ollama installation (CLI) or the GPT-4 API.
+
+Primary functions:
+- `annotate_with_ollama`: call local `ollama run <model>` and extract JSON.
+- `annotate_with_gpt4`: call OpenAI's GPT-4 via the openai Python package.
+- `batch_annotate`: run annotations over a preprocessed CSV and save results.
+- `create_validation_template`: add manual annotation columns for human review.
+
+Assumptions:
+- Input CSVs are UTF-8 encoded and contain (at minimum) `time`, `full_text`,
+  and preferably `weibo_id`, `contains_keyword`, `is_false_positive`, and
+  `keyword_compounds` produced by the preprocessing step.
 """
 
 import pandas as pd
@@ -61,11 +74,13 @@ def annotate_with_ollama(text, model="qwen2.5:7b"):
 
         response = result.stdout.strip()
         
-         # ALWAYS print raw LLM output for debugging!
+        # ALWAYS print raw LLM output for debugging!
+        # The model may return natural language + JSON; printing the raw
+        # response helps when JSON extraction fails.
         print("\n--- RAW LLM OUTPUT ---\n", response, "\n----------------------\n")
 
-        # Try to parse JSON from response
-        # Sometimes LLM adds extra text, so we need to extract JSON
+    # Try to parse JSON from response. Sometimes LLMs add explanatory text
+    # before/after the JSON block, so we extract the first {...} block.
         json_start = response.find('{')
         json_end = response.rfind('}') + 1
 
@@ -110,6 +125,7 @@ def annotate_with_gpt4(text, api_key):
         dict: Annotation results
     """
     try:
+        # Lazy import so the script doesn't require openai if only Ollama is used
         import openai
         openai.api_key = api_key
 
@@ -140,6 +156,9 @@ def annotate_with_gpt4(text, api_key):
     "reasoning": "你的理由"
 }}"""
 
+        # Call OpenAI's ChatCompletion endpoint. We use a relatively low
+        # temperature for consistent labeling. The returned message content
+        # is expected to include a JSON object; extract it similarly to Ollama.
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
@@ -151,7 +170,7 @@ def annotate_with_gpt4(text, api_key):
 
         content = response.choices[0].message.content
 
-        # Parse JSON
+        # Extract JSON object from the model's text
         json_start = content.find('{')
         json_end = content.rfind('}') + 1
         json_str = content[json_start:json_end]
@@ -181,11 +200,17 @@ def batch_annotate(input_file, output_file, num_posts=10, use_ollama=True,
         model (str): Model name for Ollama
         api_key (str): OpenAI API key if using GPT-4
     """
+    # Load preprocessed CSV. Expected to contain `full_text` and ideally
+    # `contains_keyword` and `is_false_positive` produced by the preprocessing step.
     print(f"Loading data from {input_file}...")
     df = pd.read_csv(input_file, encoding='utf-8')
 
-    # Filter for posts with keyword that aren't false positives
+    # Filter for posts with keyword that aren't false positives. If those
+    # columns don't exist, fall back to the top N rows in the file.
     if 'contains_keyword' in df.columns and 'is_false_positive' in df.columns:
+        # Be careful: is_false_positive may be boolean or contain NaN; the
+        # tilde operator works for booleans but NaNs will be treated as True
+        # by `~`. The preprocessing sets explicit booleans so this is usually safe.
         df_to_annotate = df[
             df['contains_keyword'] & ~df['is_false_positive']
         ].head(num_posts).copy()
@@ -198,17 +223,21 @@ def batch_annotate(input_file, output_file, num_posts=10, use_ollama=True,
 
     annotations = []
 
+    # Iterate rows and call the chosen LLM. We print basic progress and record
+    # both LLM output and the original post metadata for later analysis.
     for idx, row in df_to_annotate.iterrows():
         print(f"\nPost {idx + 1}/{len(df_to_annotate)}")
         print(f"Text: {row['full_text'][:100]}...")
 
-        # Annotate
+        # Annotate using the selected backend
         if use_ollama:
             annotation = annotate_with_ollama(row['full_text'], model)
         else:
             annotation = annotate_with_gpt4(row['full_text'], api_key)
 
         # Add to results
+        # Build a result dict. If `weibo_id` is missing this will raise; it's
+        # expected to exist from preprocessing, but downstream checks may adapt.
         result = {
             'weibo_id': row['weibo_id'],
             'time': row['time'],
@@ -219,6 +248,7 @@ def batch_annotate(input_file, output_file, num_posts=10, use_ollama=True,
             'text_length': row.get('text_length', len(row['full_text']))
         }
 
+        # Include any matched keyword compounds if present
         if 'keyword_compounds' in row:
             result['compounds_found'] = row['keyword_compounds']
 
@@ -228,8 +258,8 @@ def batch_annotate(input_file, output_file, num_posts=10, use_ollama=True,
         print(f"Sentiment: {annotation.get('sentiment')}")
         print(f"Reasoning: {annotation.get('reasoning')}")
 
-        # Small delay to avoid overwhelming system
-        time.sleep(0.5)
+    # Small delay to avoid overwhelming the LLM service or local CLI
+    time.sleep(0.5)
 
     # Save results
     df_results = pd.DataFrame(annotations)
