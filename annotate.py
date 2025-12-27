@@ -319,7 +319,7 @@ if __name__ == "__main__":
     # Configuration
     INPUT_FILE = "weibo_for_annotation_孝_2016-01-01.csv"  # From preprocessing
     OUTPUT_FILE = "llm_annotations_sample.csv"
-    NUM_POSTS = 10  # Start with 10 posts
+    NUM_POSTS = 10  # Start with 10 posts (can add more)
 
     # Choose LLM
     USE_OLLAMA = True  # Set to False to use GPT-4
