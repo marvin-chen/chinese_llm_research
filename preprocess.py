@@ -7,6 +7,7 @@ Prepared for manual and LLM-based exclusion filtering
 import pandas as pd
 import re
 import os
+import emoji
 import time 
 
 def preprocess_weibo_text(text):
@@ -28,36 +29,25 @@ def preprocess_weibo_text(text):
     Note: This function intentionally preserves Chinese characters and most punctuation
     while removing common noise observed in Weibo posts.
     """
-    if pd.isna(text):
+    if text is None or (isinstance(text, float) and str(text) == "nan"):
         return ""
+
     text = str(text)
 
-    # Remove things like "[哈哈]" which often denote reactions/stickers
+    # Weibo bracket tokens like [偷乐]
     text = re.sub(r'\[[^\]]+\]', '', text)
 
-    # Emoji ranges: covers many pictographs and symbol blocks. Removing these
-    # reduces noise for keyword matching and deduplication.
-    emoji_pattern = re.compile("["
-        u"\U0001F600-\U0001F64F"
-        u"\U0001F300-\U0001F5FF"
-        u"\U0001F680-\U0001F6FF"
-        u"\U0001F1E0-\U0001F1FF"
-        u"\U0001F900-\U0001F9FF"
-        u"\U0001FA00-\U0001FA6F"
-        u"\U00002600-\U000026FF"
-        u"\U00002700-\U000027BF"
-        "+]", flags=re.UNICODE)
-    text = emoji_pattern.sub('', text)
+    # Remove all emoji (handles keycaps etc.)
+    text = emoji.replace_emoji(text, replace="")
 
-    # Convert hashtags like #孝道# -> 孝道 (remove surrounding # characters)
+    # Keep hashtag content
     text = re.sub(r'#([^#]+)#', r'\1', text)
 
-    # Remove @mentions (usernames), URLs, and a few decorative symbols
+    # Remove mentions and URLs
     text = re.sub(r'@[^\s]+', '', text)
     text = re.sub(r'http[s]?://\S+', '', text)
-    text = re.sub(r'[↓△※☆…]+', '', text)
 
-    # Normalize spaces including full-width ideographic space (\u3000)
+    # Normalize whitespace
     text = re.sub(r'[\s\u3000]+', ' ', text)
     return text.strip()
 
