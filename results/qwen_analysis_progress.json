@@ -1,0 +1,34 @@
+{
+  "last_processed_idx": 1009,
+  "total_processed": 1010,
+  "successful": 1010,
+  "errors": 0,
+  "start_time": "2026-02-02T17:50:18.612905",
+  "sessions": [
+    {
+      "start_time": "2026-02-02T20:44:55.540749",
+      "duration_minutes": 0.9687835,
+      "batches": 1,
+      "processed": 10,
+      "successful": 10,
+      "errors": 0
+    },
+    {
+      "start_time": "2026-02-02T20:46:01.806577",
+      "duration_minutes": 0.7543814999999999,
+      "batches": 1,
+      "processed": 10,
+      "successful": 10,
+      "errors": 0
+    },
+    {
+      "start_time": "2026-02-02T20:52:39.697485",
+      "duration_minutes": 10.705635533333332,
+      "batches": 5,
+      "processed": 250,
+      "successful": 250,
+      "errors": 0
+    }
+  ],
+  "last_update": "2026-02-02T21:18:39.146630"
+}
