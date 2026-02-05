@@ -84,14 +84,14 @@ def process_single_tsv(file_path):
         return None
 
 def batch_process_xiao_dataset():
-    """Process all TSV files in both xiao directories and combine them"""
+    """Process all TSV files in both new directories and combine them"""
     print("="*80)
-    print("BATCH PREPROCESSING XIAO DATASET")
+    print("BATCH PREPROCESSING NEW DATASET")
     print("="*80)
     
     # Get all TSV files from both directories
-    pattern1 = "xiao-2016-2019/*.tsv"
-    pattern2 = "xiao-2020-2023/*.tsv"
+    pattern1 = "new-2016-2019/*.tsv"
+    pattern2 = "new-2020-2025/*.tsv"
     
     tsv_files = glob.glob(pattern1) + glob.glob(pattern2)
     tsv_files.sort()  # Sort chronologically
@@ -152,7 +152,7 @@ def batch_process_xiao_dataset():
     print("="*80)
     
     # Save the final dataset
-    output_file = "weibo_xiao_cleaned.csv"
+    output_file = "weibo_xiao_new_cleaned.csv"
     print(f"Saving to {output_file}...")
     
     # Select columns to save (keeping essential ones)
