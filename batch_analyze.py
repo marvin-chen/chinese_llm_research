@@ -48,14 +48,13 @@ def is_contextually_relevant(text):
     
     return has_filial_context or ('孝' in text and len(text) > 20)  # Give benefit of doubt for longer posts
 
-# Enhanced system prompt with confidence scoring
-SYSTEM_PROMPT = """你是中国文化专家，评估微博对"孝"的态度。严格按照评分标准分类。
+# Enhanced system prompt for sentiment analysis (posts already filtered for relevance)
+SYSTEM_PROMPT = """你是中国文化专家，评估微博对"孝"的态度。所有微博都已确认与孝道相关。
 
 评分标准：
-• 0 (无关): "孝"是地名/人名/书名，与内容无关
-• 0 (中性): 娱乐/玩笑语境，无道德判断
-• -1 (轻度负面): 表达压力/矛盾，但未否定孝道价值
 • -2 (强烈负面): 强烈批评孝道限制自由，视为负担/债务
+• -1 (轻度负面): 表达压力/矛盾，但未否定孝道价值
+• 0 (中性): 娱乐/玩笑语境，无道德判断
 • +1 (轻度正面): 一般性赞扬孝道，无具体细节（如"孝顺很重要"、征婚提及孝顺）
 • +2 (强烈正面): 详细描述具体孝行，或严厉谴责不孝
 
@@ -63,7 +62,12 @@ SYSTEM_PROMPT = """你是中国文化专家，评估微博对"孝"的态度。�
 +1 vs +2: 一般性言论 vs 具体详细例子
 -1 vs -2: 矛盾压力 vs 强烈批评
 
-上下文分类：Reciprocity(情感互惠) | Obligation(责任义务) | Care(赡养照护) | Conflict(家庭冲突) | Critique/Abstract(理论探讨) | None(无关)
+上下文分类（必须从以下5个选项中选1个，如果sentiment=0则bucket为空字符串）：
+• 日常实践 (日常生活中对父母的关爱照顾，包括情感交流和物质照料)
+• 责任义务 (强调孝道作为道德责任、社会规范或应尽义务)
+• 家庭冲突 (因孝道引发的家庭矛盾、代际冲突)
+• 理论探讨 (对孝道概念的抽象讨论、批判分析或文化评论)
+• 婚恋择偶 (择偶婚恋中对孝顺的要求或讨论)
 
 置信度评分（百分比0-100%）：
 • 90-100%: 非常确信，文本明确表达态度
@@ -72,41 +76,33 @@ SYSTEM_PROMPT = """你是中国文化专家，评估微博对"孝"的态度。�
 • 30-49%: 不太确信，可能有歧义
 • 0-29%: 很不确信，难以判断
 
-仅返回JSON格式：{"relevant": boolean, "sentiment": int, "bucket": "string", "confidence": int}
+仅返回JSON格式：{"sentiment": int, "bucket": "日常实践或责任义务或家庭冲突或理论探讨或婚恋择偶或空字符串", "confidence": int}
 """
 
 class BatchWeiboAnalyzer:
-    def __init__(self, input_file, output_prefix="qwen_analysis", filter_relevant=True):
+    def __init__(self, input_file, output_prefix="qwen_analysis"):
         self.input_file = input_file
         self.output_prefix = output_prefix
-        self.filter_relevant = filter_relevant
         self.progress_file = f"results/{output_prefix}_progress.json"
         self.results_file = f"results/{output_prefix}_results.csv"
         
-        # Load and filter data
+        # Load data (assumed to be already filtered for relevance)
         print(f"Loading dataset: {input_file}")
-        self.df_full = pd.read_csv(input_file)
-        print(f"Loaded {len(self.df_full)} posts")
+        self.df = pd.read_csv(input_file)
+        print(f"Loaded {len(self.df)} posts (pre-filtered for relevance)")
         
-        if filter_relevant:
-            # Pre-filter to only posts contextually discussing filial piety
-            print("Analyzing contextual relevance...")
-            relevant_mask = self.df_full['text'].apply(is_contextually_relevant)
-            self.df = self.df_full[relevant_mask].copy().reset_index(drop=True)
-            filtered_count = len(self.df)
-            print(f"Pre-filtered to {filtered_count} contextually relevant posts ({100*filtered_count/len(self.df_full):.1f}% of total)")
-            
-            if filtered_count == 0:
-                print("WARNING: No contextually relevant posts found! Check your data.")
-                return
-        else:
-            self.df = self.df_full.copy()
-        
-        # Initialize Qwen result columns (if not exist)
-        qwen_columns = ['qwen_relevant', 'qwen_sentiment', 'qwen_bucket', 'qwen_confidence', 'qwen_reasoning', 'qwen_error', 'qwen_processed_at']
-        for col in qwen_columns:
+        # Initialize Qwen result columns with proper dtypes (if not exist)
+        qwen_column_types = {
+            'qwen_sentiment': 'Int64',  # Nullable integer for -2 to +2
+            'qwen_bucket': 'object',     # String for bucket names
+            'qwen_confidence': 'Int64',  # Nullable integer for 0-100 
+            'qwen_reasoning': 'object',  # String for reasoning text
+            'qwen_error': 'object',      # String for error messages
+            'qwen_processed_at': 'object'  # String for timestamp
+        }
+        for col, dtype in qwen_column_types.items():
             if col not in self.df.columns:
-                self.df[col] = None
+                self.df[col] = pd.Series(dtype=dtype)
         
         # Load existing progress and results
         self.progress = self.load_progress()
@@ -218,23 +214,38 @@ class BatchWeiboAnalyzer:
             if 'true' in text.lower() or 'false' in text.lower():
                 result['relevant'] = 'true' in text.lower()
             
-            # Look for sentiment numbers
-            for sentiment in ['-2', '-1', '+1', '+2', '0']:
-                if sentiment in text:
-                    result['sentiment'] = int(sentiment.replace('+', ''))
-                    break
+            # Look for sentiment numbers - try multiple patterns
+            sentiment_match = re.search(r'"sentiment":\s*([+-]?\d+)', text)
+            if sentiment_match:
+                result['sentiment'] = int(sentiment_match.group(1))
+            else:
+                # Fallback: look for standalone sentiment values
+                for sentiment in ['-2', '-1', '+1', '+2', '0']:
+                    if sentiment in text:
+                        result['sentiment'] = int(sentiment.replace('+', ''))
+                        break
             
-            # Look for confidence
+            # Look for confidence - try multiple patterns
             conf_match = re.search(r'"confidence":\s*(\d+)', text)
             if conf_match:
                 result['confidence'] = int(conf_match.group(1))
+            else:
+                # Try without quotes
+                conf_match = re.search(r'confidence[：:]\s*(\d+)', text)
+                if conf_match:
+                    result['confidence'] = int(conf_match.group(1))
             
-            # Look for bucket
-            bucket_patterns = ['Reciprocity', 'Obligation', 'Care', 'Conflict', 'Critique', 'Abstract', 'None']
-            for bucket in bucket_patterns:
-                if bucket in text:
-                    result['bucket'] = bucket
-                    break
+            # Look for bucket - try multiple patterns (Chinese only)
+            bucket_match = re.search(r'"bucket":\s*"([^"]+)"', text)
+            if bucket_match:
+                result['bucket'] = bucket_match.group(1)
+            else:
+                # Fallback: look for Chinese bucket keywords anywhere in text
+                bucket_patterns = ['日常实践', '责任义务', '家庭冲突', '理论探讨', '婚恋择偶']
+                for bucket in bucket_patterns:
+                    if bucket in text:
+                        result['bucket'] = bucket
+                        break
             
             # Look for reasoning - try various patterns
             reasoning_patterns = [
@@ -252,7 +263,8 @@ class BatchWeiboAnalyzer:
                     result['reasoning'] = match.group(1).strip()
                     break
             
-            if 'relevant' in result:
+            # Return if we found sentiment or bucket (for pre-filtered relevant posts)
+            if 'sentiment' in result or 'bucket' in result or 'relevant' in result:
                 return result
         except:
             pass
@@ -260,8 +272,31 @@ class BatchWeiboAnalyzer:
         return None
 
     def extract_json(self, response_text):
-        """Extract JSON from Qwen response using robust method"""
-        return self.extract_json_robust(response_text)
+        """Extract JSON from Qwen response using robust method with validation"""
+        result = self.extract_json_robust(response_text)
+        
+        # Convert "none", "None", "null" to empty string for bucket
+        if result and 'bucket' in result:
+            if result['bucket'] and str(result['bucket']).lower() in ['none', 'null']:
+                result['bucket'] = ''
+        
+        # If sentiment is 0, set bucket to empty string and return
+        if result and 'sentiment' in result and result['sentiment'] == 0:
+            result['bucket'] = ''
+            return result
+        
+        # For non-zero sentiments, validate bucket is one of allowed values
+        if result and 'sentiment' in result and result['sentiment'] != 0:
+            if 'bucket' not in result or not result['bucket']:
+                # Non-zero sentiment needs a valid bucket - reject
+                return None
+            
+            valid_buckets = ['日常实践', '责任义务', '家庭冲突', '理论探讨', '婚恋择偶']
+            if result['bucket'] not in valid_buckets:
+                # Invalid bucket - reject this result
+                return None
+        
+        return result
     
     def process_single_post(self, text):
         """Process a single post with Qwen - no retries needed"""
@@ -288,10 +323,16 @@ class BatchWeiboAnalyzer:
             if not result.stdout.strip():
                 return {"error": "empty_response"}
             
-            json_data = self.extract_json(result.stdout.strip())
+            response_text = result.stdout.strip()
+            json_data = self.extract_json(response_text)
             if json_data:
                 return json_data
             else:
+                # Save failed response for debugging
+                with open("results/failed_extraction_debug.txt", "a", encoding="utf-8") as f:
+                    f.write(f"\n{'='*60}\nFailed extraction:\n")
+                    f.write(f"Text: {clean_text[:100]}...\n")
+                    f.write(f"Qwen output: {response_text}\n")
                 return {"error": "json_extraction_failed"}
                 
         except subprocess.TimeoutExpired:
@@ -401,22 +442,11 @@ class BatchWeiboAnalyzer:
                         session_stats["errors"] += 1
                         batch_errors += 1
                     else:
-                        # Handle results with proper defaults for irrelevant posts
-                        is_relevant = result.get('relevant', None)
-                        self.df.at[i, 'qwen_relevant'] = is_relevant
-                        
-                        if is_relevant:
-                            # For relevant posts, all fields should be provided
-                            self.df.at[i, 'qwen_sentiment'] = result.get('sentiment', 0)
-                            self.df.at[i, 'qwen_bucket'] = result.get('bucket', 'None')
-                            self.df.at[i, 'qwen_confidence'] = result.get('confidence', 50)
-                            self.df.at[i, 'qwen_reasoning'] = ''  # No reasoning for speed
-                        else:
-                            # For irrelevant posts, set appropriate defaults
-                            self.df.at[i, 'qwen_sentiment'] = 0
-                            self.df.at[i, 'qwen_bucket'] = 'None'
-                            self.df.at[i, 'qwen_confidence'] = result.get('confidence', 100)
-                            self.df.at[i, 'qwen_reasoning'] = ''  # No reasoning for speed
+                        # All posts are already relevant, just store sentiment analysis
+                        self.df.at[i, 'qwen_sentiment'] = result.get('sentiment', 0)
+                        self.df.at[i, 'qwen_bucket'] = result.get('bucket', 'None')
+                        self.df.at[i, 'qwen_confidence'] = result.get('confidence', 50)
+                        self.df.at[i, 'qwen_reasoning'] = ''  # No reasoning for speed
                         
                         self.progress["successful"] = int(self.progress["successful"] + 1)
                         session_stats["successful"] += 1
@@ -484,7 +514,7 @@ class BatchWeiboAnalyzer:
         """Save current results to CSV"""
         output_columns = [
             'post_id', 'time', 'year', 'month', 'text', 'text_length',
-            'qwen_relevant', 'qwen_sentiment', 'qwen_bucket', 'qwen_confidence', 'qwen_reasoning',
+            'qwen_sentiment', 'qwen_bucket', 'qwen_confidence', 'qwen_reasoning',
             'qwen_error', 'qwen_processed_at'
         ]
         
@@ -493,12 +523,30 @@ class BatchWeiboAnalyzer:
         self.df[available_columns].to_csv(self.results_file, index=False, encoding='utf-8')
     
     def create_truly_relevant_dataset(self):
-        """Create final dataset with only truly relevant posts"""
+        """Show summary stats - all posts are already relevant"""
         analyzed = self.df[self.df['qwen_processed_at'].notna()]
-        truly_relevant = analyzed[analyzed['qwen_relevant'] == True].copy()
         
         print(f"Analysis Summary:")
-        print(f"   Total posts: {len(self.df)}")
+        print(f"   Total posts: {len(self.df):,}")
+        print(f"   Analyzed: {len(analyzed):,}")
+        print(f"   (All posts are pre-filtered as relevant)")
+        
+        if len(analyzed) == 0:
+            print("No posts have been analyzed yet!")
+            return
+        
+        # Show sentiment distribution
+        print(f"\n💯 Sentiment Distribution:")
+        sentiment_counts = analyzed['qwen_sentiment'].value_counts().sort_index()
+        for sentiment, count in sentiment_counts.items():
+            print(f"   {sentiment:+2d}: {count:,} posts")
+        
+        # Show bucket distribution
+        if 'qwen_bucket' in analyzed.columns:
+            bucket_counts = analyzed['qwen_bucket'].value_counts()
+            print(f"\n📦 Context Buckets:")
+            for bucket, count in bucket_counts.items():
+                print(f"   {bucket}: {count:,} posts")
         print(f"   Analyzed: {len(analyzed)}")
         print(f"   Truly relevant: {len(truly_relevant)}")
         print(f"   Filtered out: {len(analyzed) - len(truly_relevant)}")
@@ -528,19 +576,19 @@ class BatchWeiboAnalyzer:
 def main():
     """Interactive main function"""
     
-    input_file = "data/weibo_xiao_sample_relevant.csv"
+    input_file = "data/weibo_xiao_relevant_only.csv"
     
     if not os.path.exists(input_file):
         print(f"ERROR: Input file '{input_file}' not found!")
-        print("TIP: Run 'python create_filtered_dataset.py' to create it first")
+        print("TIP: Run 'python filter_relevant_posts.py' first to filter relevant posts")
         return
     
     print("ANALYSIS SETUP:")
-    print("Using pre-filtered dataset with contextually relevant posts only")
+    print("Working with pre-filtered relevant posts only")
     print(f"Input file: {input_file}")
     
-    # Initialize analyzer (no filtering needed - already filtered)
-    analyzer = BatchWeiboAnalyzer(input_file, filter_relevant=False)
+    # Initialize analyzer (data already filtered for relevance)
+    analyzer = BatchWeiboAnalyzer(input_file)
     
     while True:
         processed, remaining = analyzer.show_status()
