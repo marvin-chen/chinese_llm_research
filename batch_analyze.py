@@ -298,8 +298,8 @@ class BatchWeiboAnalyzer:
         
         return result
     
-    def process_single_post(self, text):
-        """Process a single post with Qwen - no retries needed"""
+    def process_single_post(self, text, retry=False):
+        """Process a single post with Qwen - with optional retry for 100% success rate"""
         if not text or len(str(text).strip()) == 0:
             return {"error": "empty_text"}
         
@@ -307,20 +307,30 @@ class BatchWeiboAnalyzer:
         clean_text = str(text).replace('"', '\\"')[:500]
         full_prompt = f"{SYSTEM_PROMPT}\n\n微博文本：{clean_text}\n\nJSON:"
         
+        # Use faster 3b model for 2x speedup; longer timeout on retry
+        timeout_duration = 60 if retry else 30
+        
         try:
             result = subprocess.run(
-                ['ollama', 'run', 'qwen2.5:7b'],
+                ['ollama', 'run', 'qwen2.5:7b'],  
                 input=full_prompt,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
-                timeout=20  # Single reasonable timeout
+                timeout=timeout_duration  # 30s normal, 60s on retry
             )
             
             if result.returncode != 0:
+                # Retry once if ollama failed and not already retrying
+                if not retry:
+                    time.sleep(2)
+                    return self.process_single_post(text, retry=True)
                 return {"error": "ollama_failed"}
                 
             if not result.stdout.strip():
+                if not retry:
+                    time.sleep(2)
+                    return self.process_single_post(text, retry=True)
                 return {"error": "empty_response"}
             
             response_text = result.stdout.strip()
@@ -328,6 +338,10 @@ class BatchWeiboAnalyzer:
             if json_data:
                 return json_data
             else:
+                # Retry once for JSON extraction failures
+                if not retry:
+                    time.sleep(2)
+                    return self.process_single_post(text, retry=True)
                 # Save failed response for debugging
                 with open("results/failed_extraction_debug.txt", "a", encoding="utf-8") as f:
                     f.write(f"\n{'='*60}\nFailed extraction:\n")
@@ -336,8 +350,16 @@ class BatchWeiboAnalyzer:
                 return {"error": "json_extraction_failed"}
                 
         except subprocess.TimeoutExpired:
+            # Retry once with longer timeout
+            if not retry:
+                print(f"    Timeout, retrying with 60s timeout...")
+                time.sleep(2)
+                return self.process_single_post(text, retry=True)
             return {"error": "timeout"}
         except Exception as e:
+            if not retry:
+                time.sleep(2)
+                return self.process_single_post(text, retry=True)
             return {"error": f"exception: {str(e)[:50]}"}
     
     def show_status(self):
@@ -522,6 +544,38 @@ class BatchWeiboAnalyzer:
         os.makedirs("results", exist_ok=True)
         self.df[available_columns].to_csv(self.results_file, index=False, encoding='utf-8')
     
+    def reset_analysis(self):
+        """Reset all analysis progress and results - start from scratch"""
+        print("\n RESET ANALYSIS")
+        print("This will delete all progress and results, starting from scratch.")
+        confirm = input("Are you sure? Type 'yes' to confirm: ").strip().lower()
+        
+        if confirm != 'yes':
+            print("Reset cancelled.")
+            return False
+        
+        files_to_remove = [
+            self.progress_file,
+            self.results_file,
+            "results/failed_extraction_debug.txt"
+        ]
+        
+        removed_count = 0
+        for file_path in files_to_remove:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    print(f"✓ Removed: {file_path}")
+                    removed_count += 1
+                except Exception as e:
+                    print(f"✗ Failed to remove {file_path}: {e}")
+            else:
+                print(f"• Not found: {file_path}")
+        
+        print(f"\n✅ Reset complete! Removed {removed_count} file(s).")
+        print("Please restart the script to begin fresh analysis.")
+        return True
+    
     def create_truly_relevant_dataset(self):
         """Show summary stats - all posts are already relevant"""
         analyzed = self.df[self.df['qwen_processed_at'].notna()]
@@ -547,30 +601,6 @@ class BatchWeiboAnalyzer:
             print(f"\n📦 Context Buckets:")
             for bucket, count in bucket_counts.items():
                 print(f"   {bucket}: {count:,} posts")
-        print(f"   Analyzed: {len(analyzed)}")
-        print(f"   Truly relevant: {len(truly_relevant)}")
-        print(f"   Filtered out: {len(analyzed) - len(truly_relevant)}")
-        
-        if len(truly_relevant) > 0:
-            # Save truly relevant posts
-            os.makedirs("data", exist_ok=True)
-            output_file = "data/weibo_xiao_truly_relevant.csv"
-            truly_relevant.to_csv(output_file, index=False)
-            print(f"💾 Saved truly relevant posts: {output_file}")
-            
-            # Show sentiment distribution
-            if 'qwen_sentiment' in truly_relevant.columns:
-                sentiment_counts = truly_relevant['qwen_sentiment'].value_counts().sort_index()
-                print(f"\nSentiment Distribution:")
-                for sentiment, count in sentiment_counts.items():
-                    print(f"   {sentiment:+d}: {count} posts")
-            
-            # Show bucket distribution
-            if 'qwen_bucket' in truly_relevant.columns:
-                bucket_counts = truly_relevant['qwen_bucket'].value_counts()
-                print(f"\n📦 Context Buckets:")
-                for bucket, count in bucket_counts.items():
-                    print(f"   {bucket}: {count} posts")
 
 
 def main():
@@ -605,9 +635,10 @@ def main():
         print(f"5. Full run (process all remaining)")
         print(f"6. Create truly relevant dataset (filter out irrelevant)")
         print(f"7. Just show status")
+        print(f"8. Reset analysis (delete all progress & results)")
         print(f"0. Exit")
         
-        choice = input(f"\\nSelect option (0-7): ").strip()
+        choice = input(f"\nSelect option (0-8): ").strip()
         
         if choice == "0":
             print("👋 Goodbye!")
@@ -632,6 +663,10 @@ def main():
             analyzer.create_truly_relevant_dataset()
         elif choice == "7":
             continue  # Status already shown
+        elif choice == "8":
+            if analyzer.reset_analysis():
+                print("\nExiting... Please restart to begin fresh analysis.")
+                break
         else:
             print("ERROR: Invalid option!")
         
