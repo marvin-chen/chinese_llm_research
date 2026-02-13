@@ -6,6 +6,7 @@ __pycache__/
 # Datasets & outputs
 *.csv
 *.tsv
+*.json
 *.xlsx
 # System files
 .DS_Store
