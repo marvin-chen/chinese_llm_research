@@ -32,12 +32,7 @@ SYSTEM_PROMPT = """你是中国文化专家，评估微博对"孝"的态度。�
 • 理论探讨 (对孝道概念的抽象讨论、批判分析或文化评论)
 • 婚恋择偶 (择偶婚恋中对孝顺的要求或讨论)
 
-置信度评分（百分比0-100%）：
-• 90-100%: 非常确信，文本明确表达态度
-• 70-89%: 比较确信，有充分证据支持判断  
-• 50-69%: 一般确信，基于常见模式判断
-• 30-49%: 不太确信，可能有歧义
-• 0-29%: 很不确信，难以判断
+置信度评分（百分比0-100%）
 
 仅返回JSON格式：{"sentiment": int, "bucket": "日常实践或责任义务或家庭冲突或理论探讨或婚恋择偶或空字符串", "confidence": int}
 """
@@ -113,7 +108,7 @@ class BatchWeiboAnalyzer:
                 
                 # Count processed posts
                 processed_count = existing_df['qwen_processed_at'].notna().sum()
-                successful_count = existing_df['qwen_relevant'].notna().sum()
+                successful_count = existing_df['qwen_sentiment'].notna().sum()
                 error_count = existing_df['qwen_error'].notna().sum()
                 
                 print(f"   Previously processed: {processed_count} posts")
@@ -569,7 +564,7 @@ class BatchWeiboAnalyzer:
 def main():
     """Interactive main function"""
     
-    input_file = "data/weibo_xiao_relevant_only.csv"
+    input_file = "data/weibo_xiao_strict_keep.csv"
     
     if not os.path.exists(input_file):
         print(f"ERROR: Input file '{input_file}' not found!")
