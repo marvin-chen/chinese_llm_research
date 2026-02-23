@@ -3,6 +3,8 @@
 Sentiment Analysis Visualization Dashboard
 Analyzes and visualizes results from qwen_analysis_results.csv
 Works with any number of analyzed posts
+
+Note: Bucket names are automatically converted from Chinese to English for matplotlib compatibility
 """
 
 import pandas as pd
@@ -12,26 +14,47 @@ import numpy as np
 from datetime import datetime
 import os
 
-# Set style for better looking plots
+# Set style for better looking plots with English text
 plt.style.use('default')
 sns.set_palette("husl")
+# Ensure matplotlib can handle any font issues
+plt.rcParams['font.family'] = 'DejaVu Sans'
 
 def normalize_bucket_names(df):
-    """Normalize bucket names by removing Chinese translations in parentheses"""
+    """Normalize bucket names to English for matplotlib compatibility"""
     
     df = df.copy()
     
-    # Create mapping for bucket name normalization
+    # Create mapping: Chinese → English
     bucket_mapping = {
-        'Care(赡养照护)': 'Care',
+        # Chinese to English
+        '日常实践': 'Daily Practice',
+        '责任义务': 'Obligation', 
+        '家庭冲突': 'Family Conflict',
+        '理论探讨': 'Theory/Critique',
+        '婚恋择偶': 'Marriage/Dating',
+        # Mixed formats (old data)
+        'Care(赡养照护)': 'Daily Practice',
         'Obligation(责任义务)': 'Obligation', 
-        'Conflict(家庭冲突)': 'Conflict',
-        'Critique/Abstract(理论探讨)': 'Critique/Abstract',
-        'Reciprocity(情感互惠)': 'Reciprocity'
+        'Conflict(家庭冲突)': 'Family Conflict',
+        'Critique/Abstract(理论探讨)': 'Theory/Critique',
+        'Reciprocity(情感互惠)': 'Daily Practice',
+        # Pure English (already correct or legacy)
+        'Care': 'Daily Practice',
+        'Reciprocity': 'Daily Practice',
+        'Conflict': 'Family Conflict',
+        'Critique/Abstract': 'Theory/Critique',
+        # Handle None/empty
+        'None': '',
+        'none': '',
+        'nan': '',
     }
     
     # Apply normalization
     df['qwen_bucket'] = df['qwen_bucket'].replace(bucket_mapping)
+    
+    # Remove any remaining whitespace and handle NaN
+    df['qwen_bucket'] = df['qwen_bucket'].fillna('').astype(str).str.strip()
     
     return df
 
@@ -48,20 +71,31 @@ def load_and_prepare_data():
     print(f"Loading results from: {results_file}")
     df = pd.read_csv(results_file)
     
-    # Filter to only processed posts
+    # Filter to only processed posts (have sentiment analysis)
     processed_df = df[df['qwen_processed_at'].notna()].copy()
     
     # Normalize bucket names
     print(f"\nBucket normalization:")
-    original_buckets = processed_df[processed_df['qwen_relevant'] == True]['qwen_bucket'].value_counts()
-    processed_df = normalize_bucket_names(processed_df)
-    normalized_buckets = processed_df[processed_df['qwen_relevant'] == True]['qwen_bucket'].value_counts()
+    if 'qwen_bucket' in processed_df.columns:
+        original_buckets = processed_df['qwen_bucket'].value_counts()
+        processed_df = normalize_bucket_names(processed_df)
+        normalized_buckets = processed_df['qwen_bucket'].value_counts()
+        
+        print(f"Original unique buckets: {len(original_buckets)}")
+        print(f"Normalized unique buckets: {len(normalized_buckets)}")
     
-    print(f"Original unique buckets: {len(original_buckets)}")
-    print(f"Normalized unique buckets: {len(normalized_buckets)}")
+    print(f"Total posts in file: {len(df):,}")
+    print(f"Successfully processed: {len(processed_df):,}")
     
-    print(f"Total posts in file: {len(df)}")
-    print(f"Successfully processed: {len(processed_df)}")
+    # Show error breakdown if any
+    if 'qwen_error' in processed_df.columns:
+        errors = processed_df['qwen_error'].notna().sum()
+        if errors > 0:
+            print(f"Posts with errors: {errors:,}")
+            error_breakdown = processed_df[processed_df['qwen_error'].notna()]['qwen_error'].value_counts()
+            print("\nError types:")
+            for error_type, count in error_breakdown.items():
+                print(f"  {error_type}: {count}")
     
     if len(processed_df) == 0:
         print("No processed posts found!")
@@ -124,11 +158,12 @@ def create_sentiment_distribution(df, save_path='results/'):
 def create_bucket_distribution(df, save_path='results/'):
     """Create bucket distribution chart"""
     
-    # Only look at relevant posts for bucket analysis
-    relevant_df = df[df['qwen_relevant'] == True]
+    # Only look at posts with non-zero sentiment and valid buckets
+    # (sentiment=0 should have empty bucket, so we exclude those)
+    relevant_df = df[(df['qwen_sentiment'] != 0) & (df['qwen_bucket'].notna()) & (df['qwen_bucket'] != '')].copy()
     
     if len(relevant_df) == 0:
-        print("No relevant posts found for bucket analysis")
+        print("No posts with bucket classifications found")
         return
     
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
@@ -139,7 +174,7 @@ def create_bucket_distribution(df, save_path='results/'):
     # Bar chart
     bars = ax1.bar(range(len(bucket_counts)), bucket_counts.values, 
                    color=sns.color_palette("husl", len(bucket_counts)))
-    ax1.set_title(f'Context Bucket Distribution\n(Relevant posts only: n={len(relevant_df)})', 
+    ax1.set_title(f'Context Bucket Distribution\n(Non-neutral posts: n={len(relevant_df):,})', 
                   fontsize=14, fontweight='bold')
     ax1.set_xlabel('Context Buckets', fontsize=12)
     ax1.set_ylabel('Number of Posts', fontsize=12)
@@ -150,7 +185,7 @@ def create_bucket_distribution(df, save_path='results/'):
     for bar in bars:
         height = bar.get_height()
         ax1.text(bar.get_x() + bar.get_width()/2., height,
-                f'{int(height)}',
+                f'{int(height):,}',
                 ha='center', va='bottom', fontweight='bold')
     
     # Pie chart
@@ -194,8 +229,8 @@ def analyze_confidence_scores(df, save_path='results/', low_confidence_threshold
     ax2.grid(True, alpha=0.3)
     plt.colorbar(scatter, ax=ax2, label='Confidence %')
     
-    # 3. Confidence by bucket (for relevant posts)
-    relevant_df = df[df['qwen_relevant'] == True]
+    # 3. Confidence by bucket (for posts with buckets)
+    relevant_df = df[(df['qwen_sentiment'] != 0) & (df['qwen_bucket'].notna()) & (df['qwen_bucket'] != '')]
     if len(relevant_df) > 0:
         bucket_confidence = relevant_df.groupby('qwen_bucket')['qwen_confidence'].agg(['mean', 'std', 'count'])
         bucket_confidence = bucket_confidence.sort_values('mean')
@@ -241,9 +276,9 @@ def analyze_confidence_scores(df, save_path='results/', low_confidence_threshold
 def create_sentiment_bucket_heatmap(df, save_path='results/'):
     """Create heatmap showing sentiment distribution across buckets"""
     
-    relevant_df = df[df['qwen_relevant'] == True]
+    relevant_df = df[(df['qwen_sentiment'] != 0) & (df['qwen_bucket'].notna()) & (df['qwen_bucket'] != '')]
     if len(relevant_df) == 0:
-        print("No relevant posts for heatmap")
+        print("No posts with bucket classifications for heatmap")
         return
     
     # Create crosstab
@@ -282,8 +317,10 @@ def export_low_confidence_posts(df, save_path='results/', threshold=70):
         return
     
     # Select relevant columns for manual review
-    review_cols = ['post_id', 'text', 'qwen_relevant', 'qwen_sentiment', 
-                   'qwen_bucket', 'qwen_confidence', 'qwen_reasoning']
+    review_cols = ['post_id', 'text', 'qwen_sentiment', 
+                   'qwen_bucket', 'qwen_confidence', 'qwen_error']
+    # Only include columns that exist
+    review_cols = [col for col in review_cols if col in low_conf_df.columns]
     
     review_df = low_conf_df[review_cols].copy()
     review_df = review_df.sort_values('qwen_confidence')  # Sort by lowest confidence first
@@ -308,7 +345,8 @@ def generate_summary_report(df, save_path='results/'):
     """Generate comprehensive summary report"""
     
     total_posts = len(df)
-    relevant_posts = len(df[df['qwen_relevant'] == True])
+    # Count posts with buckets (non-neutral sentiment posts)
+    relevant_posts = len(df[(df['qwen_sentiment'] != 0) & (df['qwen_bucket'].notna()) & (df['qwen_bucket'] != '')])
     
     report = f"""
 SENTIMENT ANALYSIS SUMMARY REPORT
@@ -317,8 +355,8 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 DATASET OVERVIEW:
 - Total posts analyzed: {total_posts:,}
-- Relevant posts (mention filial piety): {relevant_posts:,} ({relevant_posts/total_posts*100:.1f}%)
-- Irrelevant posts: {total_posts-relevant_posts:,} ({(total_posts-relevant_posts)/total_posts*100:.1f}%)
+- Posts with context buckets (non-neutral): {relevant_posts:,} ({relevant_posts/total_posts*100:.1f}%)
+- Neutral/neutral posts: {total_posts-relevant_posts:,} ({(total_posts-relevant_posts)/total_posts*100:.1f}%)
 
 SENTIMENT DISTRIBUTION:
 """
@@ -335,8 +373,8 @@ SENTIMENT DISTRIBUTION:
         report += f"- {label} ({score}): {count:,} posts ({percentage:.1f}%)\n"
     
     if relevant_posts > 0:
-        report += f"\nCONTEXT BUCKET DISTRIBUTION (Relevant posts only):\n"
-        bucket_counts = df[df['qwen_relevant'] == True]['qwen_bucket'].value_counts()
+        report += f"\nCONTEXT BUCKET DISTRIBUTION (Non-neutral posts only):\n"
+        bucket_counts = df[(df['qwen_sentiment'] != 0) & (df['qwen_bucket'].notna()) & (df['qwen_bucket'] != '')]['qwen_bucket'].value_counts()
         for bucket, count in bucket_counts.items():
             percentage = (count / relevant_posts) * 100
             report += f"- {bucket}: {count:,} posts ({percentage:.1f}%)\n"
