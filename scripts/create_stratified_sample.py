@@ -1,12 +1,13 @@
 """
 Time-Stratified Random Sampling for Weibo Dataset
-Creates equal-per-month sample from weibo_xiao_cleaned.csv
+Creates equal-per-month sample from any cleaned CSV file
 """
 
 import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
+import argparse
 
 def create_time_stratified_sample(input_file='data/weibo_xiao_cleaned.csv', 
                                 k=2000, seed=42, 
@@ -78,7 +79,7 @@ def create_time_stratified_sample(input_file='data/weibo_xiao_cleaned.csv',
     sampling_summary = []
     
     for _, stratum in strata.iterrows():
-        year, month, N_h = stratum['year'], stratum['month'], stratum['count']
+        year, month, N_h = int(stratum['year']), int(stratum['month']), stratum['count']
         
         # Get posts for this month
         df_month = df_filtered[(df_filtered['year'] == year) & (df_filtered['month'] == month)].copy()
@@ -88,19 +89,19 @@ def create_time_stratified_sample(input_file='data/weibo_xiao_cleaned.csv',
             sample_size = k
             df_sampled = df_month.sample(n=k, random_state=seed, replace=False)
         else:
-            sample_size = N_h
+            sample_size = int(N_h)
             df_sampled = df_month.copy()
         
         sampled_dfs.append(df_sampled)
         sampling_summary.append({
             'year': year,
             'month': month,
-            'available': N_h,
+            'available': int(N_h),
             'sampled': sample_size,
             'sampling_rate': sample_size / N_h if N_h > 0 else 0
         })
         
-        print(f"   {year}-{month:02d}: {sample_size:4d} / {N_h:,} posts "
+        print(f"   {year}-{month:02d}: {sample_size:4d} / {int(N_h):,} posts "
               f"({100 * sample_size / N_h:.1f}%)")
     
     # Step 3: Combine all samples
@@ -182,16 +183,69 @@ def save_sample_results(sample_df, output_prefix="data/weibo_xiao_sample_equal_p
 def main():
     """Main execution"""
     
-    input_file = 'data/weibo_xiao_cleaned.csv'
-    k = 2000  # Target posts per month (192k total over 96 months: 2016-2023)
-    seed = 42
-    start_date = '2016-01-01'
-    end_date = '2023-12-31'
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Create time-stratified sample from cleaned Weibo data'
+    )
+    parser.add_argument(
+        '--input', '-i',
+        type=str,
+        default='data/weibo_xiao_cleaned.csv',
+        help='Path to input CSV file (default: data/weibo_xiao_cleaned.csv)'
+    )
+    parser.add_argument(
+        '--output', '-o',
+        type=str,
+        default=None,
+        help='Output file prefix (default: auto-generated from input filename)'
+    )
+    parser.add_argument(
+        '--posts-per-month', '-k',
+        type=int,
+        default=2000,
+        help='Target posts per month (default: 2000)'
+    )
+    parser.add_argument(
+        '--seed', '-s',
+        type=int,
+        default=42,
+        help='Random seed for reproducibility (default: 42)'
+    )
+    parser.add_argument(
+        '--start-date',
+        type=str,
+        default='2016-01-01',
+        help='Start date YYYY-MM-DD (default: 2016-01-01)'
+    )
+    parser.add_argument(
+        '--end-date',
+        type=str,
+        default='2023-12-31',
+        help='End date YYYY-MM-DD (default: 2023-12-31)'
+    )
+    
+    args = parser.parse_args()
+    
+    input_file = args.input
+    k = args.posts_per_month
+    seed = args.seed
+    start_date = args.start_date
+    end_date = args.end_date
+    
+    # Auto-generate output prefix if not provided
+    if args.output is None:
+        # Extract base name from input file
+        base_name = os.path.splitext(os.path.basename(input_file))[0]
+        # Remove '_cleaned' suffix if present
+        if base_name.endswith('_cleaned'):
+            base_name = base_name[:-8]
+        output_prefix = f"data/{base_name}_sample_equal_per_month"
+    else:
+        output_prefix = args.output
     
     # Check if input file exists
     if not os.path.exists(input_file):
         print(f"Error: Input file '{input_file}' not found!")
-        print("Please make sure weibo_xiao_cleaned.csv exists in the data directory.")
         return
     
     # Create stratified sample
@@ -208,7 +262,7 @@ def main():
         return
     
     # Save results
-    main_file, ids_file = save_sample_results(sample_df)
+    main_file, ids_file = save_sample_results(sample_df, output_prefix=output_prefix)
     
     print("\n" + "="*80)
     print("SAMPLING COMPLETED SUCCESSFULLY!")
@@ -218,14 +272,11 @@ def main():
     print(f"  - {ids_file}")
     print("")
     print("To reproduce this exact sample, run with the same parameters:")
-    print(f"  input_file = {input_file}")
-    print(f"  k = {k}")
-    print(f"  seed = {seed}")
-    print(f"  date range = {start_date} to {end_date}")
+    print(f"  python scripts/create_stratified_sample.py --input {input_file} --posts-per-month {k} --seed {seed} --start-date {start_date} --end-date {end_date}")
     print("")
     print("Next step: Run batch_analyze.py on this new sample")
     
     return sample_df, summary_df
 
 if __name__ == "__main__":
-    sample_df, summary_df = main()
+    main()
