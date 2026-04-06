@@ -24,7 +24,7 @@ RELEVANCE_PROMPT = """你是中国文化专家。判断以下每条微博是否�
 
 class RelevanceFilter:
     def __init__(self, input_file="data/weibo_xiao_sample_equal_per_month.csv",
-                 output_file="data/weibo_xiao_relevant_only.csv",
+                 output_file="data/relevant_only/weibo_xiao_relevant_only.csv",
                  batch_size=15,
                  char_limit=150,
                  model="qwen2.5:3b"):
@@ -185,7 +185,7 @@ class RelevanceFilter:
 def main():
     filter_obj = RelevanceFilter(
         input_file="data/weibo_xiao_sample_equal_per_month.csv",
-        output_file="data/weibo_xiao_relevant_only.csv",
+        output_file="data/relevant_only/weibo_xiao_relevant_only.csv",
         batch_size=15,  # 15 posts per batch
         char_limit=150,  # 150 chars per post
         model="qwen2.5:7b"  # 7b is faster than 3b for batch JSON (~47 hours)

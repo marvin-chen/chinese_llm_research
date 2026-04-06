@@ -39,7 +39,7 @@ confidence评分标准：
 
 class CascadeFilter:
     def __init__(self, 
-                 input_file="data/weibo_xiao_relevant_only.csv",
+                 input_file="data/relevant_only/weibo_xiao_relevant_only.csv",
                  output_keep="data/weibo_xiao_strict_keep.csv",
                  output_maybe="data/weibo_xiao_strict_maybe.csv", 
                  output_drop="data/weibo_xiao_strict_drop.csv",
@@ -311,7 +311,7 @@ class CascadeFilter:
 
 def main():
     filter_obj = CascadeFilter(
-        input_file="data/weibo_xiao_relevant_only.csv",
+        input_file="data/relevant_only/weibo_xiao_relevant_only.csv",
         output_keep="data/weibo_xiao_strict_keep.csv",
         output_maybe="data/weibo_xiao_strict_maybe.csv",
         output_drop="data/weibo_xiao_strict_drop.csv",
